@@ -1,0 +1,7 @@
+1. All of your code changes are made primarily from Arduino
+
+2. From a clean slate, firstly you have to open Arduino (making sure Processing is closed). Make any edits to your code now if necessary. Then save and upload Arduino and close it.
+
+3. Secondly, open Processing and run SyncArduinoClock.
+
+4. To make any further edits, terminate Processing (no need to close app) and open Arduino back up again. Then do 2.
