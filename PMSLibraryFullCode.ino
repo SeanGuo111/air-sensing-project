@@ -1,7 +1,9 @@
 #include "PMS.h"
 #include "SoftwareSerial.h"
+#include <TimeLib.h>
 
-// BASIC VARIABLE SETUP -----------------------------------------------------------------------------------------------
+
+// BASIC VARIABLE SETUP ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 // Serial is for printing.
 // SerialPMS communicates with PMS Sensor.
 // Both are 9600 baud.
@@ -10,22 +12,30 @@ PMS pms(SerialPMS);
 
 // PMS_READ_INTERVAL (8 sec) and PMS_READ_DELAY (5 sec) define, respectively, the time between sleep and wake, and the time between wake and read.
 // THEY CAN'T BE EQUAL, because their lengths are used to detect sensor state.
-static const uint32_t PMS_READ_INTERVAL = 40000;
-static const uint32_t PMS_READ_DELAY = 20000;
+static const uint32_t PMS_READ_INTERVAL = 10000;
+static const uint32_t PMS_READ_DELAY = 5000;
 
 // This variable, timerInterval, is the crux of the code. 
 // It alternates between the values of PMS_READ_INTERVAL and PMS_READ_DELAY to determine the state of the code. 
 // We start in the state between waking and reading: PMS_READ_DELAY.
 uint32_t timerInterval = PMS_READ_DELAY; 
 
-// setup() -------------------------------------------------------------------------------------------------------------
+// Timing stuff
+#define TIME_HEADER "T"  // Header tag for serial time sync message
+#define TIME_REQUEST 7   // ASCII bell character requests a time sync message
+
+// setup() ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 void setup()
 {
   SerialPMS.begin(9600); 
   Serial.begin(9600);
+  
+  // For time
+  setSyncProvider(requestSync);
 
   // Switch to passive mode.
   pms.passiveMode();
+  
 
   // Default state after sensor power, but undefined after ESP restart e.g. by OTA flash, so we have to manually wake up the sensor for sure.
   // Some logs from bootloader is sent via Serial port to the sensor after power up. This can cause invalid first read or wake up so be patient and wait for next read cycle.
@@ -37,11 +47,19 @@ void setup()
   //delay(PMS_READ_DELAY);
   //readData();
   //pms.sleep();
+
+
+
 }
 
-// loop() and callback() -----------------------------------------------------------------------------------------------
+// loop() and callback() ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 void loop()
-{
+{  
+  // Time Stuff
+  if (Serial.available()) {
+    processSyncMessage();
+  }
+
   static uint32_t lastTime = 0;
 
   uint32_t currentTime = millis();
@@ -64,6 +82,15 @@ void loop()
 
 // This function decides what we do based on timerInterval 
 void timerCallback() {
+
+  Serial.println("Time check:");
+  if (timeStatus() == timeSet) {
+    displayTime();
+  } else {
+    Serial.println("No time available.");
+  }
+
+
   if (timerInterval == PMS_READ_DELAY)
   {
     readData();
@@ -77,7 +104,7 @@ void timerCallback() {
   }
 }
 
-// readData() -----------------------------------------------------------------------------------------------
+// readData() ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 void readData()
 {
   PMS::DATA data;
@@ -109,4 +136,48 @@ void readData()
     Serial.println("No data.");
   }
 
+}
+// Time Communication Functions ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+// RECEIVES THE PROCESSING MESSAGE - SEAN
+void processSyncMessage() {
+  unsigned long pctime;
+  const unsigned long DEFAULT_TIME = 1357041600;  // Jan 1 2013
+
+  if (Serial.find(TIME_HEADER)) {
+    pctime = Serial.parseInt();
+    if (pctime >= DEFAULT_TIME) {  // check the integer is a valid time (greater than Jan 1 2013); SANITY CHECK - SEAN
+      setTime(pctime);             // Sync Arduino clock to the time received on the serial port; THIS IS THE REAL SYNCING LINE - SEAN
+    }
+  }
+}
+
+// SENDS TIME REQUEST - SEAN
+time_t requestSync()  //BY DEFAULT, THIS OCCURS EVERY 5 MINUTES - SEAN
+{
+  Serial.write(TIME_REQUEST);
+  return 0;  // the time will be sent later in response to serial mesg
+}
+
+// Time Utility Functions ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+void displayTime() {
+  // digital clock display of the time
+  Serial.println("Time: ");
+  Serial.print(hour());
+  printDigits(minute());
+  printDigits(second());
+  Serial.print(" ");
+  Serial.print(month());
+  Serial.print("/");
+  Serial.print(day());
+  Serial.print("/");
+  Serial.print(year());
+  Serial.println();
+}
+
+void printDigits(int digits) {
+  // utility function for digital clock display: prints preceding colon and leading 0
+  Serial.print(":");
+  if (digits < 10)
+    Serial.print('0');
+  Serial.print(digits);
 }
