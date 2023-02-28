@@ -12,8 +12,13 @@ PMS pms(SerialPMS);
 
 // PMS_READ_INTERVAL (8 sec) and PMS_READ_DELAY (5 sec) define, respectively, the time between sleep and wake, and the time between wake and read.
 // THEY CAN'T BE EQUAL, because their lengths are used to detect sensor state.
-static const uint32_t PMS_READ_INTERVAL = 10000;
-static const uint32_t PMS_READ_DELAY = 5000;
+// Passed initial is a boolean flag, determining the initial time gap to sync on the dot with the hour.
+static uint32_t PMS_READ_INTERVAL = 40000;
+static uint32_t PMS_READ_DELAY = 20000;
+
+static bool passed_initial = false;
+static uint32_t startTime = 0;
+static uint32_t lastTime = 0;
 
 // This variable, timerInterval, is the crux of the code. 
 // It alternates between the values of PMS_READ_INTERVAL and PMS_READ_DELAY to determine the state of the code. 
@@ -32,6 +37,19 @@ void setup()
   
   // For time
   setSyncProvider(requestSync);
+  requestSync();
+  processSyncMessage();
+
+  
+  Serial.print("Initial Time: ");
+  displayTime();
+  unsigned int initial_read_offset = (60 - second()) * 1000;
+  Serial.println("Initial read offset: " + String(initial_read_offset));
+  timerInterval = initial_read_offset;
+  startTime = millis();
+  lastTime = startTime;
+
+  
 
   // Switch to passive mode.
   pms.passiveMode();
@@ -42,11 +60,14 @@ void setup()
   // Sean -- I don't think these two comments are relevant because the demo code was using a different board called ESP, but I kept them in case
   pms.wakeUp();
 
+
   // To start us off, you'd think we'd need the below three lines to delay, read, and sleep.
   // But, because of the way loop() is designed, we actually don't. Explanation at the bottom of loop()
   //delay(PMS_READ_DELAY);
   //readData();
   //pms.sleep();
+
+
 
 
 
@@ -56,21 +77,30 @@ void setup()
 void loop()
 {  
   // Time Stuff
-  if (Serial.available()) {
+  if (Serial.available() && passed_initial) {
     processSyncMessage();
   }
-
-  static uint32_t lastTime = 0;
 
   uint32_t currentTime = millis();
   //Serial.println(currentTime); helps in understanding what the heck is actually happening.
 
+
   if (currentTime - lastTime >= timerInterval) {
-    lastTime = currentTime;
+
+    lastTime = lastTime + timerInterval; // Instead of lastTime = currentTime, this should prevent desync.
     timerCallback();
-    timerInterval = timerInterval == PMS_READ_DELAY ? PMS_READ_INTERVAL : PMS_READ_DELAY;
-    // The above line essentially alternates timerInterval. 
+
+    // The below lines essentially alternates timerInterval. 
     // More specifically, the conditional "timerInterval == PMS_READ_DELAY" returns PMS_READ_INTERVAL if true and returns PMS_READ_DELAY if false.
+    // First time around, always goes to PMS_READ_DELAY after the start sync offset.
+    if (!passed_initial) {
+      timerInterval = PMS_READ_DELAY;
+      passed_initial = true;
+    } else {
+      timerInterval = timerInterval == PMS_READ_DELAY ? PMS_READ_INTERVAL : PMS_READ_DELAY;
+    }
+
+    
   }
 
   // Explanation for how we delay/read/sleep off the get-go:
@@ -161,7 +191,6 @@ time_t requestSync()  //BY DEFAULT, THIS OCCURS EVERY 5 MINUTES - SEAN
 // Time Utility Functions ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 void displayTime() {
   // digital clock display of the time
-  Serial.println("Time: ");
   Serial.print(hour());
   printDigits(minute());
   printDigits(second());
@@ -173,6 +202,7 @@ void displayTime() {
   Serial.print(year());
   Serial.println();
 }
+
 
 void printDigits(int digits) {
   // utility function for digital clock display: prints preceding colon and leading 0
