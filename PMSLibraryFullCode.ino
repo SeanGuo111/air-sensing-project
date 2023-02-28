@@ -17,6 +17,7 @@ static uint32_t PMS_READ_INTERVAL = 40000;
 static uint32_t PMS_READ_DELAY = 20000;
 
 static bool passed_initial = false;
+static bool set_initial_time = false;
 static uint32_t startTime = 0;
 static uint32_t lastTime = 0;
 
@@ -41,13 +42,12 @@ void setup()
   processSyncMessage();
 
   
-  Serial.print("Initial Time: ");
-  displayTime();
-  unsigned int initial_read_offset = (60 - second()) * 1000;
-  Serial.println("Initial read offset: " + String(initial_read_offset));
-  timerInterval = initial_read_offset;
-  startTime = millis();
-  lastTime = startTime;
+  // Serial.print("Initial Time: ");
+  // displayTime();
+  // Serial.println("Initial read offset: " + String(initial_read_offset));
+  // timerInterval = initial_read_offset;
+  // startTime = millis();
+  // lastTime = startTime;
 
   
 
@@ -68,17 +68,24 @@ void setup()
   //pms.sleep();
 
 
-
-
-
 }
 
 // loop() and callback() ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 void loop()
 {  
   // Time Stuff
-  if (Serial.available() && passed_initial) {
+  if (Serial.available()) {
     processSyncMessage();
+  }
+  
+  if (!set_initial_time) {
+    Serial.print("Initial Time: ");
+    displayTime();
+    unsigned int initial_read_offset = (60 - second()) * 1000;
+    timerInterval = initial_read_offset;
+    startTime = millis();
+    lastTime = startTime;
+    set_initial_time = true;
   }
 
   uint32_t currentTime = millis();
@@ -86,6 +93,7 @@ void loop()
 
 
   if (currentTime - lastTime >= timerInterval) {
+    Serial.println(currentTime);
 
     lastTime = lastTime + timerInterval; // Instead of lastTime = currentTime, this should prevent desync.
     timerCallback();
