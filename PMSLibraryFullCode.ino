@@ -10,20 +10,17 @@
 SoftwareSerial SerialPMS(2, 3);
 PMS pms(SerialPMS);
 
-// PMS_READ_INTERVAL (8 sec) and PMS_READ_DELAY (5 sec) define, respectively, the time between sleep and wake, and the time between wake and read.
+// PMS_READ_INTERVAL (40 sec) and PMS_READ_DELAY (20 sec) define, respectively, the time between sleep and wake, and the time between wake and read.
 // THEY CAN'T BE EQUAL, because their lengths are used to detect sensor state.
 // Passed initial is a boolean flag, determining the initial time gap to sync on the dot with the hour.
-static uint32_t PMS_READ_INTERVAL = 40000;
-static uint32_t PMS_READ_DELAY = 20000;
+static const uint32_t PMS_READ_INTERVAL = 40000;
+static const uint32_t PMS_READ_DELAY = 20000;
 
-static bool passed_initial = false;
-static bool set_initial_time = false;
-static uint32_t startTime = 0;
-static uint32_t lastTime = 0;
+static bool passedInitialOffset = false;
+static unsigned long lastTime = 0;
 
 // This variable, timerInterval, is the crux of the code. 
-// It alternates between the values of PMS_READ_INTERVAL and PMS_READ_DELAY to determine the state of the code. 
-// We start in the state between waking and reading: PMS_READ_DELAY.
+// It alternates between the values of PMS_READ_INTERVAL and PMS_READ_DELAY to determine the state of the code, except for at the start, where it becomes initialReadOffset. 
 uint32_t timerInterval = PMS_READ_DELAY; 
 
 // Timing stuff
@@ -35,39 +32,49 @@ void setup()
 {
   SerialPMS.begin(9600); 
   Serial.begin(9600);
-  
-  // For time
   setSyncProvider(requestSync);
+
+  // For time sync off the get-go
   requestSync();
   processSyncMessage();
-
   
-  // Serial.print("Initial Time: ");
-  // displayTime();
-  // Serial.println("Initial read offset: " + String(initial_read_offset));
-  // timerInterval = initial_read_offset;
-  // startTime = millis();
-  // lastTime = startTime;
-
-  
-
   // Switch to passive mode.
   pms.passiveMode();
   
-
   // Default state after sensor power, but undefined after ESP restart e.g. by OTA flash, so we have to manually wake up the sensor for sure.
   // Some logs from bootloader is sent via Serial port to the sensor after power up. This can cause invalid first read or wake up so be patient and wait for next read cycle.
   // Sean -- I don't think these two comments are relevant because the demo code was using a different board called ESP, but I kept them in case
   pms.wakeUp();
 
+  /*
+  Explanation for initial time offset:
 
-  // To start us off, you'd think we'd need the below three lines to delay, read, and sleep.
-  // But, because of the way loop() is designed, we actually don't. Explanation at the bottom of loop()
-  //delay(PMS_READ_DELAY);
-  //readData();
-  //pms.sleep();
+  -initialReadOffset represents the time between the current time, at this point after having setup, woken, etc., and the first second of the next minute.
+  -timerInterval is set to initialReadOffset to make sure that the very first iteration of loop() delays for that long.
+     -Since only timerInterval is changed, the two delay constants, PMS_READ_INTERVAL and PMS_READ_DELAY, are never changed.
+     -After the very first iteration, timerInterval is changed to PMS_READ_DELAY, signifying wake-read delay, and business continues as usual with the else statement conditional.
+       -The quality of timerInterval being equal to initialReadOffset is very specifically detected with a boolean flag:
+       -This circumvents the direct jump to PMS_INTERVAL_DELAY which would occur if PMS_READ_DELAY and initialReadOffset were coincidentally equal.
+  -lastTime is set (initially) to the current time so as to provide the most accurate interval from initialReadOffset.
+  -!!!IMPORTANT. It is vital that this code is at the END of setup because it gives the latest possible lastTime, in other words, is closest to loop(). This gives it the most time accuracy.
+     -Even putting this code before passiveMode() and wakeUp() gives a 1 second offset error!
+  */
 
+  Serial.print("Initial ");
+  displayTime();
+  unsigned int initialReadOffset = getInitialReadOffset();
+  Serial.println(String(initialReadOffset));
+  timerInterval = initialReadOffset;
+  lastTime = millis();
 
+}
+
+unsigned int getInitialReadOffset() {
+  if (second() <= 40) {
+    return ((60 - second()) * 1000) - PMS_READ_DELAY;
+  } else {
+    return (120 - (PMS_READ_DELAY/1000) - second())*1000;
+  }
 }
 
 // loop() and callback() ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
@@ -77,33 +84,24 @@ void loop()
   if (Serial.available()) {
     processSyncMessage();
   }
-  
-  if (!set_initial_time) {
-    Serial.print("Initial Time: ");
-    displayTime();
-    unsigned int initial_read_offset = (60 - second()) * 1000;
-    timerInterval = initial_read_offset;
-    startTime = millis();
-    lastTime = startTime;
-    set_initial_time = true;
-  }
 
-  uint32_t currentTime = millis();
-  //Serial.println(currentTime); helps in understanding what the heck is actually happening.
+  unsigned long currentTime = millis();
 
-
+  // If the current interval has passed:
   if (currentTime - lastTime >= timerInterval) {
-    Serial.println(currentTime);
-
-    lastTime = lastTime + timerInterval; // Instead of lastTime = currentTime, this should prevent desync.
+    
+    //Serial.println(currentTime); helps in understanding what the heck is actually happening.   
+     
     timerCallback();
+    lastTime += timerInterval; // Changed from original code-- lastTime = currentTime. This should prevent desync.
 
-    // The below lines essentially alternates timerInterval. 
+
+    // The below lines essentially alternate timerInterval. 
     // More specifically, the conditional "timerInterval == PMS_READ_DELAY" returns PMS_READ_INTERVAL if true and returns PMS_READ_DELAY if false.
     // First time around, always goes to PMS_READ_DELAY after the start sync offset.
-    if (!passed_initial) {
+    if (!passedInitialOffset) {
       timerInterval = PMS_READ_DELAY;
-      passed_initial = true;
+      passedInitialOffset = true;
     } else {
       timerInterval = timerInterval == PMS_READ_DELAY ? PMS_READ_INTERVAL : PMS_READ_DELAY;
     }
@@ -111,33 +109,25 @@ void loop()
     
   }
 
-  // Explanation for how we delay/read/sleep off the get-go:
-  // Remember that we start timerInterval in wake-read state. 
-  // So, the first time through loop(), the if statement is waiting for PMS_READ_DELAY ms to pass. That gives us our initial delay.
-  // We will then get the initial reading and sleeping from within timerCallback().
-
 }
 
-// This function decides what we do based on timerInterval 
+// This function, a mini switch statement, decides what we do based on timerInterval 
 void timerCallback() {
-
-  Serial.println("Time check:");
-  if (timeStatus() == timeSet) {
-    displayTime();
-  } else {
-    Serial.println("No time available.");
+  if (Serial.available()) {
+    processSyncMessage();
   }
-
-
-  if (timerInterval == PMS_READ_DELAY)
-  {
+  if (timerInterval == PMS_READ_DELAY && passedInitialOffset) {
     readData();
-    Serial.println("Going to sleep.");
+
+    Serial.print("Data printed and going to sleep. ");
+    displayTime();
+
     pms.sleep();
-  }
-  else 
-  {
-    Serial.println("Waking up.");
+  } else {
+
+    Serial.print("Waking up. ");
+    displayTime();
+
     pms.wakeUp();
   }
 }
@@ -198,17 +188,22 @@ time_t requestSync()  //BY DEFAULT, THIS OCCURS EVERY 5 MINUTES - SEAN
 
 // Time Utility Functions ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 void displayTime() {
-  // digital clock display of the time
-  Serial.print(hour());
-  printDigits(minute());
-  printDigits(second());
-  Serial.print(" ");
-  Serial.print(month());
-  Serial.print("/");
-  Serial.print(day());
-  Serial.print("/");
-  Serial.print(year());
-  Serial.println();
+  // Digital clock display of the time, all on the same line. Only displays if time is available, sends message if unavailable.
+  if (timeStatus() == timeSet) {
+    Serial.print("Time: ");
+    Serial.print(hour());
+    printDigits(minute());
+    printDigits(second());
+    Serial.print(" ");
+    Serial.print(month());
+    Serial.print("/");
+    Serial.print(day());
+    Serial.print("/");
+    Serial.print(year());
+    Serial.println();
+  } else {
+    Serial.println("No time available.");
+  }
 }
 
 
