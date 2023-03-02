@@ -10,11 +10,11 @@
 SoftwareSerial SerialPMS(2, 3);
 PMS pms(SerialPMS);
 
-// PMS_READ_INTERVAL (40 sec) and PMS_READ_DELAY (20 sec) define, respectively, the time between sleep and wake, and the time between wake and read.
+// PMS_READ_INTERVAL and PMS_READ_DELAY define, respectively, the time between sleep and wake, and the time between wake and read.
 // THEY CAN'T BE EQUAL, because their lengths are used to detect sensor state.
 // Passed initial is a boolean flag, determining the initial time gap to sync on the dot with the hour.
-static const uint32_t PMS_READ_INTERVAL = 40000;
-static const uint32_t PMS_READ_DELAY = 20000;
+static const uint32_t PMS_READ_INTERVAL = 3540000;
+static const uint32_t PMS_READ_DELAY = 60000;
 
 static bool passedInitialOffset = false;
 static unsigned long lastTime = 0;
@@ -62,19 +62,26 @@ void setup()
 
   Serial.print("Initial ");
   displayTime();
-  unsigned int initialReadOffset = getInitialReadOffset();
+  unsigned long initialReadOffset = getInitialReadOffset();
   Serial.println(String(initialReadOffset));
   timerInterval = initialReadOffset;
   lastTime = millis();
 
 }
 
-unsigned int getInitialReadOffset() {
-  if (second() <= 40) {
-    return ((60 - second()) * 1000) - PMS_READ_DELAY;
+unsigned long getInitialReadOffset() {
+  unsigned long msToNextMinute = (60 - (unsigned long)second()) * 1000;
+  unsigned long msToNext58Min = 0;
+
+  //58: one less minute from current seconds, another less minute from 1 min buffer
+  if (minute() == 59) {
+    msToNext58Min =  58 * 60000;
   } else {
-    return (120 - (PMS_READ_DELAY/1000) - second())*1000;
+    msToNext58Min = ((58 - (unsigned long)minute()) * 60000);
   }
+  Serial.println(msToNextMinute);
+  Serial.println(msToNext58Min);
+  return msToNextMinute + msToNext58Min;
 }
 
 // loop() and callback() ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
