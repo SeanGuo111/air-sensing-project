@@ -10,16 +10,8 @@
 SoftwareSerial SerialPMS(2, 3);
 PMS pms(SerialPMS);
 
-// readDelay, originally PMS_READ_DELAY, defines the time between sleep and wake. PMS_READ_INTERVAL was removed, as each read interval is now recalculated in real time in the loop using getNextDelay()--half minute or hour.
-// Passed initial is a boolean flag, determining the initial time gap to sync on the dot with the hour.
-static const uint32_t readDelay = 10000;
-
-static bool passedInitialDelay = false;
-static unsigned long lastTime = 0;
-
-// This variable, timerInterval, is the crux of the code. 
-// It alternates between the values of getNextDelay() and readDelay to determine the state of the code, except for at the start, where it becomes initialReadDelay. 
-uint32_t timerInterval = readDelay; 
+static bool justWoke = false;
+static bool justRead = false;
 
 // Timing stuff
 #define TIME_HEADER "T"  // Header tag for serial time sync message
@@ -44,25 +36,14 @@ void setup()
   // Sean -- I don't think these two comments are relevant because the demo code was using a different board called ESP, but I kept them in case
   pms.wakeUp();
 
-  /*
-  Explanation for initial time offset:
-
-  -initialDelay represents the time between the current time, at this point after having setup, woken, etc., and the first second of the next minute.
-  -timerInterval is set to initialDelay to make sure that the very first iteration of loop() delays for that long.
-     -After the very first iteration, timerInterval is changed to readDelay, signifying wake-read delay, and after the first iteration, business continues as usual in the else statement.
-       -The quality of timerInterval being equal to initialDelay is very specifically detected with a boolean flag:
-       -This circumvents the direct jump to PMS_INTERVAL_DELAY which would occur if readDelay and initialDelay were coincidentally equal.
-  -lastTime is set (initially) to the current time so as to provide the most accurate interval of time since initialDelay.
-  -!!!IMPORTANT. It is vital that this code is at the END of setup because it gives the latest possible lastTime, in other words, is closest to loop(). This gives it the most time accuracy.
-     -Even putting this code before passiveMode() and wakeUp() gives offset error!
-  */
-
+  //Initial time delay until 59 minute, 0 sec.
   Serial.print("Initial ");
   displayTime();
-  unsigned long initialDelay = getNextHalfMinuteDelay();
+  unsigned long initialDelay = getInitialDelay();
   Serial.println("Initial delay to sync (ms): " + String(initialDelay));
-  timerInterval = initialDelay;
-  lastTime = millis();
+  // Why delay? Well, I figured a quick delay in the setup, while nothing else is going on, would be harmless, and far preferable to a once-off if statement corresponding to a millis() checking in loop().
+  //  Besides, maybe blocking is good-- I don't want any premature readings.
+  delay(initialDelay);
 
 }
 
@@ -74,54 +55,30 @@ void loop()
     processSyncMessage();
   }
 
-  unsigned long currentTime = millis();
+  int currentMinute = minute();
+  int currentSecond = second();
 
-  // If the current interval has passed:
-  if (currentTime - lastTime >= timerInterval) {
-    
-    //Serial.println(currentTime); helps in understanding what the heck is actually happening.   
-    
-    requestSync();
-    timerCallback();
-    lastTime += timerInterval; // Changed from original code-- lastTime = currentTime. This should prevent desync.
-
-
-    // The below lines essentially alternate timerInterval. 
-    // More specifically, the conditional "timerInterval == readDelay" returns nextDelay() if true and returns readDelay if false.
-    // First time around, timeInterval is always set to readDelay after initialDelay.
-    if (!passedInitialDelay) {
-      timerInterval = readDelay;
-      passedInitialDelay = true;
-    } else {
-      timerInterval = timerInterval == readDelay ? getNextHalfMinuteDelay() : readDelay;
-      Serial.println("Timer interval: " + String(timerInterval));
-    }
-
-    
-  }
-
-}
-
-// This function, a mini switch statement, decides what we do based on timerInterval 
-void timerCallback() {
-  if (Serial.available()) {
-    processSyncMessage();
-  }
-  if (timerInterval == readDelay && passedInitialDelay) {
-    readData();
-
-    Serial.println("Data printed and going to sleep.");
-
-    pms.sleep();
-  } else {
-
+  if ((currentMinute == 59 && currentSecond == 0) && !justWoke) {
     Serial.print("Waking up. "); displayTime();
-
     pms.wakeUp();
+    
+    justRead = false;
+    justWoke = true;
+    requestSync();
+
+  } else if ((currentMinute == 0 && currentSecond == 0) && !justRead) {
+    readData();
+    Serial.println("Data printed and going to sleep.");
+    pms.sleep();
+
+    justWoke = false;
+    justRead = true;
+    requestSync();
   }
+
 }
-// getDelays() ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
-unsigned long getNextHourDelay() {
+
+unsigned long getInitialDelay() {
   unsigned long msToNextMinute = (60 - (unsigned long)second()) * 1000;
   unsigned long msToNext58Min = 0;
 
@@ -133,16 +90,6 @@ unsigned long getNextHourDelay() {
   }
 
   return msToNextMinute + msToNext58Min;
-}
-
-// Debugging purposes: readDelay at 10 sec, time in between at 20 sec. 30 sec total loop
-unsigned long getNextHalfMinuteDelay() {
-
-  if (second() < 20) {
-    return (20 - (unsigned long)second()) * 1000;
-  } else {
-    return (50 - (unsigned long)second()) * 1000;
-  }
 }
 
 // readData() ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
@@ -170,8 +117,6 @@ void readData()
 
     Serial.print("PM 10.0 (ug/m3): ");
     Serial.println(data.PM_AE_UG_10_0);
-
-    Serial.println();
   }
   else
   {
